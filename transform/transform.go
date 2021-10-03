@@ -1,9 +1,11 @@
 package transform
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -52,6 +54,8 @@ import (
 // 	]
 // }
 
+type Transform func(Transformable, chan<- Upload)
+
 type Transformer struct {
 	S3Ingress  string
 	S3Egress   string
@@ -59,7 +63,7 @@ type Transformer struct {
 	Visibility int64
 	BatchSize  int64
 	Session    session.Session
-	Transform  func(Transformable, chan<- Upload)
+	Transform  Transform
 }
 
 type Config struct {
@@ -174,4 +178,25 @@ func (t Transformer) Upload(upload Upload) {
 		panic(fmt.Sprintf("%+v", err))
 	}
 	fmt.Println("Uploaded record!")
+}
+
+func (t Transformer) Run(ctx context.Context) error {
+	ticker := time.NewTicker(1000 * time.Millisecond)
+	downloadQueue := make(chan Record)
+	transformQueue := make(chan Transformable)
+	uploadQueue := make(chan Upload)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			go t.Receive(downloadQueue)
+		case record := <-downloadQueue:
+			go t.Download(record, transformQueue)
+		case data := <-transformQueue:
+			go t.Transform(data, uploadQueue)
+		case upload := <-uploadQueue:
+			go t.Upload(upload)
+		}
+	}
 }

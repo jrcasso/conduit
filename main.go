@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -31,42 +30,24 @@ func main() {
 		Visibility: visibility,
 		BatchSize:  batchSize,
 		Session:    *sess,
-		Transform: func(t transform.Transformable, c chan<- transform.Upload) {
-			fmt.Println("Transforming record...")
-			c <- transform.Upload{
-				Data: fmt.Sprintf("FOO %v", t.Data),
-				Key:  "test-2",
-			}
-			fmt.Println("Transformed record!")
-		},
+		Transform:  myTransform,
 	}
 
 	defer func() {
 		cancel()
 	}()
 
-	if err := run(ctx, t); err != nil {
+	if err := t.Run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, t transform.Transformer) error {
-	downloadQueue := make(chan transform.Record)
-	transformQueue := make(chan transform.Transformable)
-	uploadQueue := make(chan transform.Upload)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.Tick(5 * time.Second):
-			go t.Receive(downloadQueue)
-		case record := <-downloadQueue:
-			go t.Download(record, transformQueue)
-		case data := <-transformQueue:
-			go t.Transform(data, uploadQueue)
-		case upload := <-uploadQueue:
-			go t.Upload(upload)
-		}
+func myTransform(t transform.Transformable, uploadQueue chan<- transform.Upload) {
+	fmt.Println("Transforming record...")
+	uploadQueue <- transform.Upload{
+		Data: fmt.Sprintf("FOO %v", t.Data),
+		Key:  "test-2",
 	}
+	fmt.Println("Transformed record!")
 }
