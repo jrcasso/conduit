@@ -10,6 +10,10 @@ services:
       context: .
     environment:
       - ENV=dev
+      - TRANSFORM_S3_EGRESS_BUCKET=egress
+      - TRANSFORM_QUEUE_URL=http://localhost:4566/000000000000/ingress-queue
+      - TRANSFORM_VISIBILITY_TIMEOUT=3
+      - TRANSFORM_BATCH_SIZE=1
     volumes:
       - go-tools:/go/bin
       - ~/.aws/:/root/.aws/:ro
