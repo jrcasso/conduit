@@ -1,0 +1,27 @@
+version: '3.7'
+
+volumes:
+  go-tools:
+    driver: local
+
+services:
+  transformer:
+    build:
+      context: .
+    environment:
+      - ENV=dev
+    volumes:
+      - go-tools:/go/bin
+      - ~/.aws/:/root/.aws/:ro
+      - ~/.ssh/:/root/.ssh/:ro
+
+  localstack:
+    image: localstack/localstack
+    ports:
+      - "4566:4566"
+      - "4571:4571"
+    environment:
+      - SERVICES=s3,sqs,sns
+      - DATA_DIR=/tmp/localstack
+    volumes:
+      - "./scripts/aws-init.sh:/docker-entrypoint-initaws.d/aws-init.sh"
