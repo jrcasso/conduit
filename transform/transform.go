@@ -57,21 +57,18 @@ import (
 type Transform func(Transformable, chan<- Upload)
 
 type Transformer struct {
-	S3Ingress  string
-	S3Egress   string
-	QueueUrl   string
-	Visibility int64
-	BatchSize  int64
-	Session    session.Session
-	Transform  Transform
+	Config
+	Session   session.Session
+	Transform Transform
 }
 
 type Config struct {
-	S3Ingress  string
-	S3Egress   string
-	QueueUrl   string
-	Visibility int64
-	BatchSize  int64
+	BatchSize         int64
+	PollFrequency     int64
+	QueueUrl          string
+	S3Ingress         string
+	S3Egress          string
+	VisibilityTimeout int64
 }
 
 type Response struct {
@@ -133,6 +130,25 @@ func (t Transformer) Download(record Record, ch chan<- Transformable) {
 	}
 }
 
+func NewTransformer(s session.Session, f Transform, c Config) Transformer {
+	// Use defaults if config values were not set
+	if c.BatchSize == 0 {
+		c.BatchSize = 1
+	}
+	if c.VisibilityTimeout == 0 {
+		c.VisibilityTimeout = 10
+	}
+	if c.PollFrequency == 0 {
+		c.PollFrequency = 1000
+	}
+
+	return Transformer{
+		Session:   s,
+		Transform: f,
+		Config:    c,
+	}
+}
+
 func (t Transformer) Receive(ch chan<- Record) {
 	var response Response
 	svc := sqs.New(&t.Session)
@@ -146,7 +162,7 @@ func (t Transformer) Receive(ch chan<- Record) {
 		},
 		QueueUrl:            aws.String(t.QueueUrl),
 		MaxNumberOfMessages: &t.BatchSize,
-		VisibilityTimeout:   &t.Visibility,
+		VisibilityTimeout:   &t.VisibilityTimeout,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
@@ -181,7 +197,7 @@ func (t Transformer) Upload(upload Upload) {
 }
 
 func (t Transformer) Run(ctx context.Context) error {
-	ticker := time.NewTicker(1000 * time.Millisecond)
+	ticker := time.NewTicker(time.Duration(t.PollFrequency) * time.Millisecond)
 	downloadQueue := make(chan Record)
 	transformQueue := make(chan Transformable)
 	uploadQueue := make(chan Upload)
