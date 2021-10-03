@@ -111,8 +111,8 @@ type Upload struct {
 	Data string
 }
 
-func (t Transformer) Download(record Record, ch chan<- Transformable) {
-	fmt.Println("Downloading record...")
+func (t Transformer) Extract(record Record, ch chan<- Transformable) {
+	fmt.Println("Extracting record...")
 	downloader := s3manager.NewDownloader(&t.Session)
 	buff := &aws.WriteAtBuffer{}
 	_, err := downloader.Download(buff, &s3.GetObjectInput{
@@ -123,7 +123,7 @@ func (t Transformer) Download(record Record, ch chan<- Transformable) {
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
 	}
-	fmt.Println("Downloaded record!")
+	fmt.Println("Extracted record!")
 	ch <- Transformable{
 		Record: record,
 		Data:   string(buff.Bytes()),
@@ -182,8 +182,8 @@ func (t Transformer) Receive(ch chan<- Record) {
 	}
 }
 
-func (t Transformer) Upload(upload Upload) {
-	fmt.Println("Uploading record...")
+func (t Transformer) Load(upload Upload) {
+	fmt.Println("Loading record...")
 	uploader := s3manager.NewUploader(&t.Session)
 	_, err := uploader.Upload(&s3manager.UploadInput{
 		Bucket: aws.String(t.S3Egress),
@@ -193,26 +193,26 @@ func (t Transformer) Upload(upload Upload) {
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
 	}
-	fmt.Println("Uploaded record!")
+	fmt.Println("Loaded record!")
 }
 
 func (t Transformer) Run(ctx context.Context) error {
 	ticker := time.NewTicker(time.Duration(t.PollFrequency) * time.Millisecond)
-	downloadQueue := make(chan Record)
+	extractQueue := make(chan Record)
 	transformQueue := make(chan Transformable)
-	uploadQueue := make(chan Upload)
+	loadQueue := make(chan Upload)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			go t.Receive(downloadQueue)
-		case record := <-downloadQueue:
-			go t.Download(record, transformQueue)
+			go t.Receive(extractQueue)
+		case record := <-extractQueue:
+			go t.Extract(record, transformQueue)
 		case data := <-transformQueue:
-			go t.Transform(data, uploadQueue)
-		case upload := <-uploadQueue:
-			go t.Upload(upload)
+			go t.Transform(data, loadQueue)
+		case upload := <-loadQueue:
+			go t.Load(upload)
 		}
 	}
 }
