@@ -21,11 +21,7 @@ func main() {
 			Endpoint:         aws.String("http://localstack:4566"),
 		},
 	}))
-	t := transform.NewTransformer(*sess, myTransform, transform.Config{
-		S3Ingress: os.Getenv("TRANSFORM_S3_INGRESS_BUCKET"),
-		S3Egress:  os.Getenv("TRANSFORM_S3_EGRESS_BUCKET"),
-		QueueUrl:  os.Getenv("TRANSFORM_QUEUE_URL"),
-	})
+	t := transform.NewTransformer(*sess, myTransform)
 
 	if err := t.Run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,12 +65,11 @@ type Transformer struct {
 }
 
 type Config struct {
-	BatchSize         int64
-	PollFrequency     int64
-	QueueUrl          string
-	S3Ingress         string
-	S3Egress          string
-	VisibilityTimeout int64
+	BatchSize         *int64
+	PollFrequency     *int64
+	QueueUrl          *string
+	S3Egress          *string
+	VisibilityTimeout *int64
 }
 
 type Response struct {
@@ -112,22 +113,32 @@ type Upload struct {
 	Transformable
 }
 
-func NewTransformer(s session.Session, f Transform, c Config) Transformer {
+const (
+	DEFAULT_BATCH_SIZE         = 1
+	DEFAULT_POLL_FREQUENCY     = 5
+	DEFAULT_VISIBILITY_TIMEOUT = 10
+)
+
+func NewTransformer(s session.Session, f Transform) Transformer {
+	return NewTransformerWithConfig(s, f, &Config{})
+}
+
+func NewTransformerWithConfig(s session.Session, f Transform, config *Config) Transformer {
 	// Use defaults if config values were not set
-	if c.BatchSize == 0 {
-		c.BatchSize = 1
-	}
-	if c.VisibilityTimeout == 0 {
-		c.VisibilityTimeout = 10
-	}
-	if c.PollFrequency == 0 {
-		c.PollFrequency = 3000
-	}
+	batchSize, _ := strconv.ParseInt(os.Getenv("TRANSFORM_BATCH_SIZE"), 10, 64)
+	pollFrequency, _ := strconv.ParseInt(os.Getenv("TRANSFORM_POLL_FREQUENCY"), 10, 64)
+	visibilityTimeout, _ := strconv.ParseInt(os.Getenv("TRANSFORM_VISIBILITY_TIMEOUT"), 10, 64)
+
+	setDefaultString(config.S3Egress, aws.String(os.Getenv("TRANSFORM_S3_EGRESS_BUCKET")), nil)
+	setDefaultString(config.QueueUrl, aws.String(os.Getenv("TRANSFORM_QUEUE_URL")), nil)
+	setDefaultInt64(config.BatchSize, aws.Int64(batchSize), aws.Int64(1))
+	setDefaultInt64(config.PollFrequency, aws.Int64(pollFrequency), aws.Int64(3))
+	setDefaultInt64(config.VisibilityTimeout, aws.Int64(visibilityTimeout), aws.Int64(10))
 
 	return Transformer{
 		Session:   s,
 		Transform: f,
-		Config:    c,
+		Config:    *config,
 	}
 }
 
@@ -135,7 +146,7 @@ func (t Transformer) Delete(record Record) {
 	svc := sqs.New(&t.Session)
 	fmt.Println("Deleting record...")
 	_, err := svc.DeleteMessage(&sqs.DeleteMessageInput{
-		QueueUrl:      aws.String(t.QueueUrl),
+		QueueUrl:      t.QueueUrl,
 		ReceiptHandle: aws.String(record.ReceiptHandle),
 	})
 	if err != nil {
@@ -167,7 +178,7 @@ func (t Transformer) Load(upload Upload, ch chan<- Record) {
 	fmt.Println("Loading record...")
 	uploader := s3manager.NewUploader(&t.Session)
 	_, err := uploader.Upload(&s3manager.UploadInput{
-		Bucket: aws.String(t.S3Egress),
+		Bucket: t.S3Egress,
 		Key:    aws.String(upload.Key),
 		Body:   strings.NewReader(upload.Data),
 	})
@@ -189,9 +200,9 @@ func (t Transformer) Receive(ch chan<- Record) {
 		MessageAttributeNames: []*string{
 			aws.String(sqs.QueueAttributeNameAll),
 		},
-		QueueUrl:            aws.String(t.QueueUrl),
-		MaxNumberOfMessages: &t.BatchSize,
-		VisibilityTimeout:   &t.VisibilityTimeout,
+		QueueUrl:            t.QueueUrl,
+		MaxNumberOfMessages: t.BatchSize,
+		VisibilityTimeout:   t.VisibilityTimeout,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
@@ -214,7 +225,7 @@ func (t Transformer) Receive(ch chan<- Record) {
 }
 
 func (t Transformer) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(t.PollFrequency) * time.Millisecond)
+	ticker := time.NewTicker(time.Duration(*t.PollFrequency) * time.Second)
 	extractQueue := make(chan Record)
 	transformQueue := make(chan Transformable)
 	loadQueue := make(chan Upload)
@@ -237,4 +248,40 @@ func (t Transformer) Run(ctx context.Context) error {
 			go t.Delete(record)
 		}
 	}
+}
+
+func setDefaultString(value *string, envValue *string, defaultValue *string) {
+	// Use config variables
+	// Use environment variables
+	// Use default values
+	if value != nil {
+		return
+	}
+	if envValue != nil {
+		*value = *envValue
+		return
+	}
+	if defaultValue != nil {
+		*value = *defaultValue
+		return
+	}
+	panic("Required environment variable not defined.")
+}
+
+func setDefaultInt64(value *int64, envValue *int64, defaultValue *int64) {
+	// Use config variables
+	// Use environment variables
+	// Use default values
+	if value != nil {
+		return
+	}
+	if envValue != nil {
+		*value = *envValue
+		return
+	}
+	if defaultValue != nil {
+		*value = *defaultValue
+		return
+	}
+	panic("Required environment variable not defined.")
 }
