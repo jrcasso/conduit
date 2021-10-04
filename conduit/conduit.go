@@ -114,7 +114,7 @@ type Upload struct {
 func NewConduit(s session.Session, f Transform, c Config) Conduit {
 	// Use defaults if config values were not set
 	if c.BatchSize == 0 {
-		c.BatchSize = 1
+		c.BatchSize = 10
 	}
 	if c.VisibilityTimeout == 0 {
 		c.VisibilityTimeout = 10
