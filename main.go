@@ -7,7 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/jrcasso/transformer/transform"
+	"github.com/jrcasso/conduit/conduit"
 )
 
 func main() {
@@ -21,10 +21,9 @@ func main() {
 			Endpoint:         aws.String("http://localstack:4566"),
 		},
 	}))
-	t := transform.NewTransformer(*sess, myTransform, transform.Config{
-		S3Ingress: os.Getenv("TRANSFORM_S3_INGRESS_BUCKET"),
-		S3Egress:  os.Getenv("TRANSFORM_S3_EGRESS_BUCKET"),
-		QueueUrl:  os.Getenv("TRANSFORM_QUEUE_URL"),
+	t := conduit.NewConduit(*sess, myTransform, conduit.Config{
+		S3Egress: os.Getenv("CONDUIT_S3_EGRESS_BUCKET"),
+		QueueUrl: os.Getenv("CONDUIT_QUEUE_URL"),
 	})
 
 	if err := t.Run(ctx); err != nil {
@@ -33,13 +32,13 @@ func main() {
 	}
 }
 
-func myTransform(t transform.Transformable, uploadQueue chan<- transform.Upload) {
+func myTransform(t conduit.Transformable, uploadQueue chan<- conduit.Upload) {
 	fmt.Println("Transforming record...")
 	// Do some transformation on t.Data
 	newData := fmt.Sprintf("new data %v", t.Data)
 
-	uploadQueue <- transform.Upload{
-		Transformable: transform.Transformable{
+	uploadQueue <- conduit.Upload{
+		Transformable: conduit.Transformable{
 			Data:   newData,
 			Record: t.Record,
 		},

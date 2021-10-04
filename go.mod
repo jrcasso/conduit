@@ -1,4 +1,4 @@
-module github.com/jrcasso/transformer
+module github.com/jrcasso/conduit
 
 go 1.17
 

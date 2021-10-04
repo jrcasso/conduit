@@ -1,4 +1,4 @@
-package transform
+package conduit
 
 import (
 	"context"
@@ -56,7 +56,7 @@ import (
 
 type Transform func(Transformable, chan<- Upload)
 
-type Transformer struct {
+type Conduit struct {
 	Config
 	Session   session.Session
 	Transform Transform
@@ -66,7 +66,6 @@ type Config struct {
 	BatchSize         int64
 	PollFrequency     int64
 	QueueUrl          string
-	S3Ingress         string
 	S3Egress          string
 	VisibilityTimeout int64
 }
@@ -112,7 +111,7 @@ type Upload struct {
 	Transformable
 }
 
-func NewTransformer(s session.Session, f Transform, c Config) Transformer {
+func NewConduit(s session.Session, f Transform, c Config) Conduit {
 	// Use defaults if config values were not set
 	if c.BatchSize == 0 {
 		c.BatchSize = 1
@@ -124,18 +123,18 @@ func NewTransformer(s session.Session, f Transform, c Config) Transformer {
 		c.PollFrequency = 3000
 	}
 
-	return Transformer{
+	return Conduit{
 		Session:   s,
 		Transform: f,
 		Config:    c,
 	}
 }
 
-func (t Transformer) Delete(record Record) {
-	svc := sqs.New(&t.Session)
+func (c Conduit) Delete(record Record) {
+	svc := sqs.New(&c.Session)
 	fmt.Println("Deleting record...")
 	_, err := svc.DeleteMessage(&sqs.DeleteMessageInput{
-		QueueUrl:      aws.String(t.QueueUrl),
+		QueueUrl:      aws.String(c.QueueUrl),
 		ReceiptHandle: aws.String(record.ReceiptHandle),
 	})
 	if err != nil {
@@ -144,9 +143,9 @@ func (t Transformer) Delete(record Record) {
 	fmt.Println("Deleted record!")
 }
 
-func (t Transformer) Extract(record Record, ch chan<- Transformable) {
+func (c Conduit) Extract(record Record, ch chan<- Transformable) {
 	fmt.Println("Extracting record...")
-	downloader := s3manager.NewDownloader(&t.Session)
+	downloader := s3manager.NewDownloader(&c.Session)
 	buff := &aws.WriteAtBuffer{}
 	_, err := downloader.Download(buff, &s3.GetObjectInput{
 		Bucket: &record.S3.Bucket.Name,
@@ -163,11 +162,11 @@ func (t Transformer) Extract(record Record, ch chan<- Transformable) {
 	}
 }
 
-func (t Transformer) Load(upload Upload, ch chan<- Record) {
+func (c Conduit) Load(upload Upload, ch chan<- Record) {
 	fmt.Println("Loading record...")
-	uploader := s3manager.NewUploader(&t.Session)
+	uploader := s3manager.NewUploader(&c.Session)
 	_, err := uploader.Upload(&s3manager.UploadInput{
-		Bucket: aws.String(t.S3Egress),
+		Bucket: aws.String(c.S3Egress),
 		Key:    aws.String(upload.Key),
 		Body:   strings.NewReader(upload.Data),
 	})
@@ -178,9 +177,9 @@ func (t Transformer) Load(upload Upload, ch chan<- Record) {
 	fmt.Println("Loaded record!")
 }
 
-func (t Transformer) Receive(ch chan<- Record) {
+func (c Conduit) Receive(ch chan<- Record) {
 	var response Response
-	svc := sqs.New(&t.Session)
+	svc := sqs.New(&c.Session)
 	fmt.Println("Polling for messages...")
 	messages, err := svc.ReceiveMessage(&sqs.ReceiveMessageInput{
 		AttributeNames: []*string{
@@ -189,9 +188,9 @@ func (t Transformer) Receive(ch chan<- Record) {
 		MessageAttributeNames: []*string{
 			aws.String(sqs.QueueAttributeNameAll),
 		},
-		QueueUrl:            aws.String(t.QueueUrl),
-		MaxNumberOfMessages: &t.BatchSize,
-		VisibilityTimeout:   &t.VisibilityTimeout,
+		QueueUrl:            aws.String(c.QueueUrl),
+		MaxNumberOfMessages: &c.BatchSize,
+		VisibilityTimeout:   &c.VisibilityTimeout,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
@@ -213,28 +212,28 @@ func (t Transformer) Receive(ch chan<- Record) {
 	}
 }
 
-func (t Transformer) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(t.PollFrequency) * time.Millisecond)
+func (c Conduit) Run(ctx context.Context) error {
+	ticker := time.NewTicker(time.Duration(c.PollFrequency) * time.Millisecond)
 	extractQueue := make(chan Record)
 	transformQueue := make(chan Transformable)
 	loadQueue := make(chan Upload)
 	deleteQueue := make(chan Record)
 
-	go t.Receive(extractQueue)
+	go c.Receive(extractQueue)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			go t.Receive(extractQueue)
+			go c.Receive(extractQueue)
 		case record := <-extractQueue:
-			go t.Extract(record, transformQueue)
+			go c.Extract(record, transformQueue)
 		case data := <-transformQueue:
-			go t.Transform(data, loadQueue)
+			go c.Transform(data, loadQueue)
 		case upload := <-loadQueue:
-			go t.Load(upload, deleteQueue)
+			go c.Load(upload, deleteQueue)
 		case record := <-deleteQueue:
-			go t.Delete(record)
+			go c.Delete(record)
 		}
 	}
 }
