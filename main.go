@@ -21,10 +21,7 @@ func main() {
 			Endpoint:         aws.String("http://localstack:4566"),
 		},
 	}))
-	t := conduit.NewConduit(*sess, myTransform, conduit.Config{
-		S3Egress: os.Getenv("CONDUIT_S3_EGRESS_BUCKET"),
-		QueueUrl: os.Getenv("CONDUIT_QUEUE_URL"),
-	})
+	t := conduit.NewConduit(*sess, myTransform)
 
 	if err := t.Run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)

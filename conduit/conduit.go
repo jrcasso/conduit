@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,46 +16,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/sqs"
 )
 
-// {
-// 	"Records":[
-// 		 {
-// 				"eventVersion":"2.1",
-// 				"eventSource":"aws:s3",
-// 				"awsRegion":"us-east-1",
-// 				"eventTime":"2021-10-03T05:05:03.622Z",
-// 				"eventName":"ObjectCreated:Put",
-// 				"userIdentity":{  // Not implemented
-// 					 "principalId":"AIDAJDPLRKLG7UEXAMPLE"
-// 				},
-// 				"requestParameters":{  // Not implemented
-// 					 "sourceIPAddress":"127.0.0.1"
-// 				},
-// 				"responseElements":{  // Not implemented
-// 					 "x-amz-request-id":"27e06596",
-// 					 "x-amz-id-2":"eftixk72aD6Ap51TnqcoF8eFidJG9Z/2"
-// 				},
-// 				"s3":{
-// 					 "s3SchemaVersion":"1.0",  // Not implemented
-// 					 "configurationId":"testConfigRule",  // Not implemented
-// 					 "bucket":{
-// 							"name":"ingress",
-// 							"ownerIdentity":{  // Not implemented
-// 								 "principalId":"A3NL1KOZZKExample"
-// 							},
-// 							"arn":"arn:aws:s3:::ingress"
-// 					 },
-// 					 "object":{
-// 							"key":"Makefile",
-// 							"size":59,
-// 							"eTag":"2d21a73d66fe9a154b3e7e1442e82c1c",
-// 							"versionId":null,
-// 							"sequencer":"0055AED6DCD90281E5"
-// 					 }
-// 				}
-// 		 }
-// 	]
-// }
-
 type Transform func(Transformable, chan<- Upload)
 
 type Conduit struct {
@@ -63,11 +25,11 @@ type Conduit struct {
 }
 
 type Config struct {
-	BatchSize         int64
-	PollFrequency     int64
-	QueueUrl          string
-	S3Egress          string
-	VisibilityTimeout int64
+	BatchSize         *int64
+	PollFrequency     *int64
+	QueueUrl          *string
+	S3Egress          *string
+	VisibilityTimeout *int64
 }
 
 type Response struct {
@@ -111,22 +73,29 @@ type Upload struct {
 	Transformable
 }
 
-func NewConduit(s session.Session, f Transform, c Config) Conduit {
+const (
+	DEFAULT_BATCH_SIZE         = 10
+	DEFAULT_POLL_FREQUENCY     = 3000
+	DEFAULT_VISIBILITY_TIMEOUT = 10
+)
+
+func NewConduit(s session.Session, f Transform) Conduit {
+	return NewConduitWithConfig(s, f, &Config{})
+}
+
+func NewConduitWithConfig(s session.Session, f Transform, config *Config) Conduit {
 	// Use defaults if config values were not set
-	if c.BatchSize == 0 {
-		c.BatchSize = 10
-	}
-	if c.VisibilityTimeout == 0 {
-		c.VisibilityTimeout = 10
-	}
-	if c.PollFrequency == 0 {
-		c.PollFrequency = 3000
-	}
+
+	config.S3Egress = setDefaultString(config.S3Egress, aws.String(os.Getenv("CONDUIT_S3_EGRESS_BUCKET")), nil)
+	config.QueueUrl = setDefaultString(config.QueueUrl, aws.String(os.Getenv("CONDUIT_QUEUE_URL")), nil)
+	config.BatchSize = setDefaultInt64(config.BatchSize, aws.String(os.Getenv("CONDUIT_BATCH_SIZE")), aws.Int64(DEFAULT_BATCH_SIZE))
+	config.PollFrequency = setDefaultInt64(config.PollFrequency, aws.String(os.Getenv("CONDUIT_POLL_FREQUENCY")), aws.Int64(DEFAULT_POLL_FREQUENCY))
+	config.VisibilityTimeout = setDefaultInt64(config.VisibilityTimeout, aws.String(os.Getenv("CONDUIT_VISIBILITY_TIMEOUT")), aws.Int64(DEFAULT_VISIBILITY_TIMEOUT))
 
 	return Conduit{
 		Session:   s,
 		Transform: f,
-		Config:    c,
+		Config:    *config,
 	}
 }
 
@@ -134,7 +103,7 @@ func (c Conduit) Delete(record Record) {
 	svc := sqs.New(&c.Session)
 	fmt.Println("Deleting record...")
 	_, err := svc.DeleteMessage(&sqs.DeleteMessageInput{
-		QueueUrl:      aws.String(c.QueueUrl),
+		QueueUrl:      c.QueueUrl,
 		ReceiptHandle: aws.String(record.ReceiptHandle),
 	})
 	if err != nil {
@@ -166,7 +135,7 @@ func (c Conduit) Load(upload Upload, ch chan<- Record) {
 	fmt.Println("Loading record...")
 	uploader := s3manager.NewUploader(&c.Session)
 	_, err := uploader.Upload(&s3manager.UploadInput{
-		Bucket: aws.String(c.S3Egress),
+		Bucket: c.S3Egress,
 		Key:    aws.String(upload.Key),
 		Body:   strings.NewReader(upload.Data),
 	})
@@ -188,9 +157,9 @@ func (c Conduit) Receive(ch chan<- Record) {
 		MessageAttributeNames: []*string{
 			aws.String(sqs.QueueAttributeNameAll),
 		},
-		QueueUrl:            aws.String(c.QueueUrl),
-		MaxNumberOfMessages: &c.BatchSize,
-		VisibilityTimeout:   &c.VisibilityTimeout,
+		QueueUrl:            c.QueueUrl,
+		MaxNumberOfMessages: c.BatchSize,
+		VisibilityTimeout:   c.VisibilityTimeout,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
@@ -213,7 +182,7 @@ func (c Conduit) Receive(ch chan<- Record) {
 }
 
 func (c Conduit) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(c.PollFrequency) * time.Millisecond)
+	ticker := time.NewTicker(time.Duration(*c.PollFrequency) * time.Millisecond)
 	extractQueue := make(chan Record)
 	transformQueue := make(chan Transformable)
 	loadQueue := make(chan Upload)
@@ -236,4 +205,38 @@ func (c Conduit) Run(ctx context.Context) error {
 			go c.Delete(record)
 		}
 	}
+}
+
+func setDefaultString(value *string, envValue *string, defaultValue *string) *string {
+	// Config Heirarchy:
+	//   Use config variables
+	//   Use environment variables
+	//   Use default values
+	if value != nil {
+		return value
+	}
+	if envValue != nil && *envValue != "" {
+		return envValue
+	}
+	if defaultValue != nil {
+		return defaultValue
+	}
+	panic("Required environment variable not defined.")
+}
+
+func setDefaultInt64(value *int64, env *string, defaultValue *int64) *int64 {
+	// Use config variables
+	// Use environment variables
+	// Use default values
+	envValue, err := strconv.ParseInt(*env, 10, 64)
+	if value != nil {
+		return value
+	}
+	if err == nil && *env != "" {
+		return &envValue
+	}
+	if defaultValue != nil {
+		return defaultValue
+	}
+	panic("Required environment variable not defined.")
 }

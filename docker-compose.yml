@@ -12,8 +12,6 @@ services:
       - ENV=dev
       - CONDUIT_S3_EGRESS_BUCKET=egress
       - CONDUIT_QUEUE_URL=http://localstack:4566/000000000000/ingress-queue
-      - CONDUIT_VISIBILITY_TIMEOUT=3
-      - CONDUIT_BATCH_SIZE=1
     volumes:
       - go-tools:/go/bin
       - ~/.aws/:/root/.aws/:ro
