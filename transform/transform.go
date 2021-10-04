@@ -76,12 +76,13 @@ type Response struct {
 }
 
 type Record struct {
-	EventVersion string   `json:"eventVersion"`
-	EventSource  string   `json:"eventSource"`
-	EwsRegion    string   `json:"awsRegion"`
-	EventTime    string   `json:"eventTime"`
-	EventName    string   `json:"eventName"`
-	S3           S3Record `json:"s3"`
+	EventVersion  string `json:"eventVersion"`
+	EventSource   string `json:"eventSource"`
+	EwsRegion     string `json:"awsRegion"`
+	EventTime     string `json:"eventTime"`
+	EventName     string `json:"eventName"`
+	ReceiptHandle string
+	S3            S3Record `json:"s3"`
 }
 
 type S3Record struct {
@@ -107,8 +108,40 @@ type Transformable struct {
 }
 
 type Upload struct {
-	Key  string
-	Data string
+	Key string
+	Transformable
+}
+
+func NewTransformer(s session.Session, f Transform, c Config) Transformer {
+	// Use defaults if config values were not set
+	if c.BatchSize == 0 {
+		c.BatchSize = 1
+	}
+	if c.VisibilityTimeout == 0 {
+		c.VisibilityTimeout = 10
+	}
+	if c.PollFrequency == 0 {
+		c.PollFrequency = 3000
+	}
+
+	return Transformer{
+		Session:   s,
+		Transform: f,
+		Config:    c,
+	}
+}
+
+func (t Transformer) Delete(record Record) {
+	svc := sqs.New(&t.Session)
+	fmt.Println("Deleting record...")
+	_, err := svc.DeleteMessage(&sqs.DeleteMessageInput{
+		QueueUrl:      aws.String(t.QueueUrl),
+		ReceiptHandle: aws.String(record.ReceiptHandle),
+	})
+	if err != nil {
+		panic(fmt.Sprintf("%+v", err))
+	}
+	fmt.Println("Deleted record!")
 }
 
 func (t Transformer) Extract(record Record, ch chan<- Transformable) {
@@ -130,29 +163,25 @@ func (t Transformer) Extract(record Record, ch chan<- Transformable) {
 	}
 }
 
-func NewTransformer(s session.Session, f Transform, c Config) Transformer {
-	// Use defaults if config values were not set
-	if c.BatchSize == 0 {
-		c.BatchSize = 1
+func (t Transformer) Load(upload Upload, ch chan<- Record) {
+	fmt.Println("Loading record...")
+	uploader := s3manager.NewUploader(&t.Session)
+	_, err := uploader.Upload(&s3manager.UploadInput{
+		Bucket: aws.String(t.S3Egress),
+		Key:    aws.String(upload.Key),
+		Body:   strings.NewReader(upload.Data),
+	})
+	if err != nil {
+		panic(fmt.Sprintf("%+v", err))
 	}
-	if c.VisibilityTimeout == 0 {
-		c.VisibilityTimeout = 10
-	}
-	if c.PollFrequency == 0 {
-		c.PollFrequency = 1000
-	}
-
-	return Transformer{
-		Session:   s,
-		Transform: f,
-		Config:    c,
-	}
+	ch <- upload.Record
+	fmt.Println("Loaded record!")
 }
 
 func (t Transformer) Receive(ch chan<- Record) {
 	var response Response
 	svc := sqs.New(&t.Session)
-	fmt.Println("Receiving record...")
+	fmt.Println("Polling for messages...")
 	messages, err := svc.ReceiveMessage(&sqs.ReceiveMessageInput{
 		AttributeNames: []*string{
 			aws.String(sqs.MessageSystemAttributeNameSentTimestamp),
@@ -167,33 +196,21 @@ func (t Transformer) Receive(ch chan<- Record) {
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
 	}
-	fmt.Println("Received record!")
 	for _, message := range messages.Messages {
 		json.Unmarshal([]byte(*message.Body), &response)
-	}
-	if len(response.Records) > 0 {
-		for _, record := range response.Records {
+		if len(response.Records) == 1 {
+			fmt.Println("Received message with records")
+			// There should only ever be a single record
+			response.Records[0].ReceiptHandle = *message.ReceiptHandle
 			fmt.Println("Adding record to queue...")
-			ch <- record
+			ch <- response.Records[0]
 			fmt.Println("Added record to queue")
+		} else if len(response.Records) > 1 {
+			panic("Received more than one record from SQS!")
+		} else {
+			fmt.Println("No messages received.")
 		}
-	} else {
-		fmt.Println("No messages received.")
 	}
-}
-
-func (t Transformer) Load(upload Upload) {
-	fmt.Println("Loading record...")
-	uploader := s3manager.NewUploader(&t.Session)
-	_, err := uploader.Upload(&s3manager.UploadInput{
-		Bucket: aws.String(t.S3Egress),
-		Key:    aws.String(upload.Key),
-		Body:   strings.NewReader(upload.Data),
-	})
-	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
-	}
-	fmt.Println("Loaded record!")
 }
 
 func (t Transformer) Run(ctx context.Context) error {
@@ -201,6 +218,9 @@ func (t Transformer) Run(ctx context.Context) error {
 	extractQueue := make(chan Record)
 	transformQueue := make(chan Transformable)
 	loadQueue := make(chan Upload)
+	deleteQueue := make(chan Record)
+
+	go t.Receive(extractQueue)
 	for {
 		select {
 		case <-ctx.Done():
@@ -212,7 +232,9 @@ func (t Transformer) Run(ctx context.Context) error {
 		case data := <-transformQueue:
 			go t.Transform(data, loadQueue)
 		case upload := <-loadQueue:
-			go t.Load(upload)
+			go t.Load(upload, deleteQueue)
+		case record := <-deleteQueue:
+			go t.Delete(record)
 		}
 	}
 }

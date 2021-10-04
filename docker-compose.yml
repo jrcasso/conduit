@@ -25,7 +25,8 @@ services:
       - "4566:4566"
       - "4571:4571"
     environment:
-      - SERVICES=s3,sqs,sns
       - DATA_DIR=/tmp/localstack
+      - DEBUG=1
+      - SERVICES=s3,sqs,sns
     volumes:
       - "./scripts/aws-init.sh:/docker-entrypoint-initaws.d/aws-init.sh"

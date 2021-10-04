@@ -39,8 +39,11 @@ func myTransform(t transform.Transformable, uploadQueue chan<- transform.Upload)
 	newData := fmt.Sprintf("new data %v", t.Data)
 
 	uploadQueue <- transform.Upload{
-		Data: newData,
-		Key:  fmt.Sprintf("transformed-%v", t.Record.S3.Object.Key),
+		Transformable: transform.Transformable{
+			Data:   newData,
+			Record: t.Record,
+		},
+		Key: fmt.Sprintf("transformed-%v", t.Record.S3.Object.Key),
 	}
 	fmt.Println("Transformed record!")
 }
