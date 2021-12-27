@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -23,10 +22,7 @@ func main() {
 	}))
 	c := conduit.NewConduit(*sess, myTransform)
 
-	if err := c.Run(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", err)
-		os.Exit(1)
-	}
+	c.Run(ctx)
 }
 
 func myTransform(t conduit.Transformable) conduit.Upload {

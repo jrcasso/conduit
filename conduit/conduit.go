@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -26,6 +27,7 @@ type Conduit struct {
 
 type Config struct {
 	BatchSize         *int64
+	Concurrency       *int64
 	PollFrequency     *int64
 	QueueUrl          *string
 	S3Egress          *string
@@ -75,6 +77,7 @@ type Upload struct {
 
 const (
 	DEFAULT_BATCH_SIZE         = 10
+	DEFAULT_CONCURRENCY        = 5
 	DEFAULT_POLL_FREQUENCY     = 3000
 	DEFAULT_VISIBILITY_TIMEOUT = 10
 )
@@ -89,6 +92,7 @@ func NewConduitWithConfig(s session.Session, f Transform, config *Config) Condui
 	config.S3Egress = setDefaultString(config.S3Egress, aws.String(os.Getenv("CONDUIT_S3_EGRESS_BUCKET")), nil)
 	config.QueueUrl = setDefaultString(config.QueueUrl, aws.String(os.Getenv("CONDUIT_QUEUE_URL")), nil)
 	config.BatchSize = setDefaultInt64(config.BatchSize, aws.String(os.Getenv("CONDUIT_BATCH_SIZE")), aws.Int64(DEFAULT_BATCH_SIZE))
+	config.Concurrency = setDefaultInt64(config.Concurrency, aws.String(os.Getenv("CONDUIT_CONCURRENCY")), aws.Int64(DEFAULT_CONCURRENCY))
 	config.PollFrequency = setDefaultInt64(config.PollFrequency, aws.String(os.Getenv("CONDUIT_POLL_FREQUENCY")), aws.Int64(DEFAULT_POLL_FREQUENCY))
 	config.VisibilityTimeout = setDefaultInt64(config.VisibilityTimeout, aws.String(os.Getenv("CONDUIT_VISIBILITY_TIMEOUT")), aws.Int64(DEFAULT_VISIBILITY_TIMEOUT))
 
@@ -181,33 +185,39 @@ func (c Conduit) Receive(ch chan<- Record) {
 	}
 }
 
-func (c Conduit) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(*c.PollFrequency) * time.Millisecond)
+func (c Conduit) Run(ctx context.Context) {
+	var wg sync.WaitGroup
 	extractQueue := make(chan Record)
 	transformQueue := make(chan Transformable)
 	loadQueue := make(chan Upload)
 	deleteQueue := make(chan Record)
-
-	go c.Receive(extractQueue)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
+	for i := 0; i < int(*c.Concurrency); i++ {
+		wg.Add(1)
+		go func(ctx context.Context) {
+			ticker := time.NewTicker(time.Duration(*c.PollFrequency) * time.Millisecond)
 			go c.Receive(extractQueue)
-		case record := <-extractQueue:
-			go c.Extract(record, transformQueue)
-		case data := <-transformQueue:
-			// Abstract away async channel internals from the implementer
-			go func(data Transformable, queue chan<- Upload) {
-				queue <- c.Transform(data)
-			}(data, loadQueue)
-		case upload := <-loadQueue:
-			go c.Load(upload, deleteQueue)
-		case record := <-deleteQueue:
-			go c.Delete(record)
-		}
+			for {
+				select {
+				case <-ctx.Done():
+					wg.Done()
+				case <-ticker.C:
+					go c.Receive(extractQueue)
+				case record := <-extractQueue:
+					go c.Extract(record, transformQueue)
+				case data := <-transformQueue:
+					// Abstract away async channel internals from the implementer
+					go func(data Transformable, queue chan<- Upload) {
+						queue <- c.Transform(data)
+					}(data, loadQueue)
+				case upload := <-loadQueue:
+					go c.Load(upload, deleteQueue)
+				case record := <-deleteQueue:
+					go c.Delete(record)
+				}
+			}
+		}(ctx)
 	}
+	wg.Wait()
 }
 
 func setDefaultString(value *string, envValue *string, defaultValue *string) *string {

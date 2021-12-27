@@ -49,5 +49,6 @@ The application utilizes the following environment variables:
 |`CONDUIT_S3_EGRESS_BUCKET`|*None*|
 |`CONDUIT_QUEUE_URL`|*None*|
 |`CONDUIT_BATCH_SIZE`|`10`|
+|`CONDUIT_CONCURRENCY`|`5`|
 |`CONDUIT_POLL_FREQUENCY` (milliseconds) |`3000`|
 |`CONDUIT_VISIBILITY_TIMEOUT` (seconds)|`10`|
