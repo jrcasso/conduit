@@ -16,7 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/sqs"
 )
 
-type Transform func(Transformable, chan<- Upload)
+type Transform func(Transformable) Upload
 
 type Conduit struct {
 	Config
@@ -198,7 +198,10 @@ func (c Conduit) Run(ctx context.Context) error {
 		case record := <-extractQueue:
 			go c.Extract(record, transformQueue)
 		case data := <-transformQueue:
-			go c.Transform(data, loadQueue)
+			// Abstract away async channel internals from the implementer
+			go func(data Transformable, queue chan<- Upload) {
+				queue <- c.Transform(data)
+			}(data, loadQueue)
 		case upload := <-loadQueue:
 			go c.Load(upload, deleteQueue)
 		case record := <-deleteQueue:

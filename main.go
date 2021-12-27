@@ -29,14 +29,14 @@ func main() {
 	}
 }
 
-func myTransform(t conduit.Transformable, uploadQueue chan<- conduit.Upload) {
+func myTransform(t conduit.Transformable) conduit.Upload {
 	fmt.Println("Transforming record...")
 	// Do some transformation on t.Data
 	t.Data = fmt.Sprintf("new data %v", t.Data)
 
-	uploadQueue <- conduit.Upload{
+	fmt.Println("Transformed record!")
+	return conduit.Upload{
 		Key:           fmt.Sprintf("transformed-%v", t.Record.S3.Object.Key),
 		Transformable: t,
 	}
-	fmt.Println("Transformed record!")
 }
