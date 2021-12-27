@@ -21,9 +21,9 @@ func main() {
 			Endpoint:         aws.String("http://localstack:4566"),
 		},
 	}))
-	t := conduit.NewConduit(*sess, myTransform)
+	c := conduit.NewConduit(*sess, myTransform)
 
-	if err := t.Run(ctx); err != nil {
+	if err := c.Run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)
 		os.Exit(1)
 	}
