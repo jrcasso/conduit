@@ -193,6 +193,7 @@ func (c Conduit) Run(ctx context.Context) {
 	deleteQueue := make(chan Record)
 	for i := 0; i < int(*c.Concurrency); i++ {
 		wg.Add(1)
+		time.Sleep(time.Duration(*c.PollFrequency / *c.Concurrency) * time.Millisecond)
 		go func(ctx context.Context) {
 			ticker := time.NewTicker(time.Duration(*c.PollFrequency) * time.Millisecond)
 			go c.Receive(extractQueue)
