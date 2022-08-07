@@ -3,12 +3,13 @@ package conduit
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -105,19 +106,19 @@ func NewConduitWithConfig(s session.Session, f Transform, config *Config) Condui
 
 func (c Conduit) Delete(record Record) {
 	svc := sqs.New(&c.Session)
-	fmt.Println("Deleting record...")
+	log.Info("Deleting record...")
 	_, err := svc.DeleteMessage(&sqs.DeleteMessageInput{
 		QueueUrl:      c.QueueUrl,
 		ReceiptHandle: aws.String(record.ReceiptHandle),
 	})
 	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+		log.Errorf("Failed to delete SQS record: %+v", err)
 	}
-	fmt.Println("Deleted record!")
+	log.Infof("Deleted record: %+v", record.S3.Object.Key)
 }
 
 func (c Conduit) Extract(record Record, ch chan<- Transformable) {
-	fmt.Println("Extracting record...")
+	log.Info("Extracting record...")
 	downloader := s3manager.NewDownloader(&c.Session)
 	buff := &aws.WriteAtBuffer{}
 	_, err := downloader.Download(buff, &s3.GetObjectInput{
@@ -126,9 +127,9 @@ func (c Conduit) Extract(record Record, ch chan<- Transformable) {
 	})
 
 	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+		log.Errorf("Failed to download file from S3: %+v", err)
 	}
-	fmt.Println("Extracted record!")
+	log.Info("Extracted record!")
 	ch <- Transformable{
 		Record: record,
 		Data:   string(buff.Bytes()),
@@ -136,7 +137,7 @@ func (c Conduit) Extract(record Record, ch chan<- Transformable) {
 }
 
 func (c Conduit) Load(upload Upload, ch chan<- Record) {
-	fmt.Println("Loading record...")
+	log.Info("Loading record...")
 	uploader := s3manager.NewUploader(&c.Session)
 	_, err := uploader.Upload(&s3manager.UploadInput{
 		Bucket: c.S3Egress,
@@ -144,16 +145,16 @@ func (c Conduit) Load(upload Upload, ch chan<- Record) {
 		Body:   strings.NewReader(upload.Data),
 	})
 	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+		log.Errorf("Failed to upload file to S3: %+v", err)
 	}
 	ch <- upload.Record
-	fmt.Println("Loaded record!")
+	log.Info("Loaded record!")
 }
 
 func (c Conduit) Receive(ch chan<- Record) {
 	var response Response
 	svc := sqs.New(&c.Session)
-	fmt.Println("Polling for messages...")
+	log.Info("Polling for messages...")
 	messages, err := svc.ReceiveMessage(&sqs.ReceiveMessageInput{
 		AttributeNames: []*string{
 			aws.String(sqs.MessageSystemAttributeNameSentTimestamp),
@@ -166,21 +167,21 @@ func (c Conduit) Receive(ch chan<- Record) {
 		VisibilityTimeout:   c.VisibilityTimeout,
 	})
 	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+		log.Warnf("Failed to receive SQS messages: %+v", err)
 	}
 	for _, message := range messages.Messages {
 		json.Unmarshal([]byte(*message.Body), &response)
 		if len(response.Records) == 1 {
-			fmt.Println("Received message with records")
+			log.Info("Received message with records")
 			// There should only ever be a single record
 			response.Records[0].ReceiptHandle = *message.ReceiptHandle
-			fmt.Println("Adding record to queue...")
+			log.Info("Adding record to queue...")
 			ch <- response.Records[0]
-			fmt.Println("Added record to queue")
+			log.Info("Added record to queue")
 		} else if len(response.Records) > 1 {
-			panic("Received more than one record from SQS!")
+			log.Warn("Received more than one record from SQS!")
 		} else {
-			fmt.Println("No messages received.")
+			log.Info("No messages received.")
 		}
 	}
 }
