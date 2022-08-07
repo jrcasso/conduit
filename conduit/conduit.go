@@ -39,9 +39,9 @@ type Response struct {
 }
 
 type Record struct {
+	AwsRegion     string `json:"awsRegion"`
 	EventVersion  string `json:"eventVersion"`
 	EventSource   string `json:"eventSource"`
-	EwsRegion     string `json:"awsRegion"`
 	EventTime     string `json:"eventTime"`
 	EventName     string `json:"eventName"`
 	ReceiptHandle string
