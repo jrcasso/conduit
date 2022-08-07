@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM golang:1.17
+FROM golang:1.19
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -12,5 +12,3 @@ RUN apt-get update -qq && \
         ./aws/install && \
     apt-get clean && \
     rm -rf aws/ awscliv2.zip /var/lib/apt/lists/*
-
-
